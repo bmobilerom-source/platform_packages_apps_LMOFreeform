@@ -33,6 +33,7 @@ import com.libremobileos.sidebar.utils.contains
 import com.libremobileos.sidebar.utils.getBadgedIcon
 import com.libremobileos.sidebar.utils.getInfo
 import com.libremobileos.sidebar.utils.isResizeableActivity
+import com.libremobileos.sidebar.utils.isSidebarPackageHidden
 import com.libremobileos.sidebar.utils.isSidebarUserAllowed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -132,6 +133,10 @@ class ServiceViewModel(private val application: Application): AndroidViewModel(a
                 .take(MAX_PREDICTED_APPS)
                 .mapNotNull { target ->
                     runCatching {
+                        if (application.isSidebarPackageHidden(target.packageName)) {
+                            logger.d("appPredictionCallback: package in hide_applist, skipped ${target.packageName}")
+                            return@runCatching null
+                        }
                         val info = application.packageManager.getApplicationInfo(target.packageName, PackageManager.GET_ACTIVITIES)
                         val launchIntent = application.packageManager.getLaunchIntentForPackage(target.packageName)
                         val component = launchIntent!!.component!!
@@ -166,6 +171,15 @@ class ServiceViewModel(private val application: Application): AndroidViewModel(a
                     val newApps = sidebarApps
                         .filter { it.userId == userId }
                         .mapNotNull { entity ->
+                            if (application.isSidebarPackageHidden(entity.packageName)) {
+                                logger.d("userProfileReceiver: purging hidden ${entity.packageName}")
+                                repository.deleteSidebarApp(
+                                    entity.packageName,
+                                    entity.activityName,
+                                    entity.userId
+                                )
+                                return@mapNotNull null
+                            }
                             runCatching { entity.toAppInfo() }
                                 .onFailure { e ->
                                     logger.e("failed to add entity $entity: $e" )
@@ -285,6 +299,15 @@ class ServiceViewModel(private val application: Application): AndroidViewModel(a
                                 logger.w("initSidebarAppList: userid not allowed: $entity")
                                 return@forEach
                             }
+                            if (application.isSidebarPackageHidden(entity.packageName)) {
+                                logger.w("initSidebarAppList: package in hide_applist, removing $entity")
+                                repository.deleteSidebarApp(
+                                    entity.packageName,
+                                    entity.activityName,
+                                    entity.userId
+                                )
+                                return@forEach
+                            }
                             runCatching {
                                 add(entity.toAppInfo())
                             }.onFailure { e ->
@@ -294,7 +317,10 @@ class ServiceViewModel(private val application: Application): AndroidViewModel(a
                         }
                         // then the predicted apps
                         addAll(
-                            predictedApps.filter { sidebarApps?.contains(it)?.not() ?: true }
+                            predictedApps.filter {
+                                (sidebarApps?.contains(it)?.not() ?: true) &&
+                                    !application.isSidebarPackageHidden(it.packageName)
+                            }
                         )
                     }
                 }
@@ -306,6 +332,9 @@ class ServiceViewModel(private val application: Application): AndroidViewModel(a
     }
 
     private fun SidebarAppsEntity.toAppInfo(): AppInfo {
+        if (application.isSidebarPackageHidden(packageName)) {
+            throw Exception("package is in hide_applist")
+        }
         if (!application.isResizeableActivity(packageName, activityName)) {
             throw Exception("activity is not resizeable")
         }

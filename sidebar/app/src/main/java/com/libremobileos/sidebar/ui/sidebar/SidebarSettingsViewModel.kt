@@ -24,7 +24,9 @@ import com.libremobileos.sidebar.service.SidebarService
 import com.libremobileos.sidebar.utils.Logger
 import com.libremobileos.sidebar.utils.contains
 import com.libremobileos.sidebar.utils.getSidebarFilteredUsers
+import com.libremobileos.sidebar.utils.getSidebarHiddenPackages
 import com.libremobileos.sidebar.utils.isResizeableActivity
+import com.libremobileos.sidebar.utils.isSidebarPackageHidden
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,6 +98,10 @@ class SidebarSettingsViewModel(private val application: Application) : AndroidVi
             .apply()
 
     fun addSidebarApp(appInfo: SidebarAppInfo) {
+        if (application.isSidebarPackageHidden(appInfo.packageName)) {
+            logger.d("addSidebarApp: package hidden from sidebar, skipped ${appInfo.packageName}")
+            return
+        }
         repository.insertSidebarApp(appInfo.packageName, appInfo.activityName, appInfo.userId)
     }
 
@@ -113,6 +119,19 @@ class SidebarSettingsViewModel(private val application: Application) : AndroidVi
 
     private fun initAllAppList() {
         viewModelScope.launch(Dispatchers.IO) {
+            val hiddenPackages = application.getSidebarHiddenPackages()
+            // Drop any previously pinned sidebar entries that are now hidden.
+            repository.getAllSidebarWithoutLiveData()?.forEach { entity ->
+                if (hiddenPackages.contains(entity.packageName)) {
+                    logger.d("initAllAppList: purging hidden sidebar app ${entity.packageName}")
+                    repository.deleteSidebarApp(
+                        entity.packageName,
+                        entity.activityName,
+                        entity.userId
+                    )
+                }
+            }
+
             userManager.getSidebarFilteredUsers().forEach { userInfo ->
                 logger.d("initAllAppList for user $userInfo")
                 val list = launcherApps.getActivityList(null, userInfo.userHandle)
@@ -120,7 +139,9 @@ class SidebarSettingsViewModel(private val application: Application) : AndroidVi
 
                 list.forEach { info ->
                     val component = info.componentName
-                    if (!application.isResizeableActivity(component)) {
+                    if (hiddenPackages.contains(component.packageName)) {
+                        logger.d("package in hide_applist, skipped $component")
+                    } else if (!application.isResizeableActivity(component)) {
                         logger.d("activity not resizeable, skipped $component")
                     } else {
                         allAppList.add(

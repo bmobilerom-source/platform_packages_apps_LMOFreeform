@@ -20,8 +20,10 @@ import com.libremobileos.sidebar.bean.AppInfo
 import com.libremobileos.sidebar.utils.Logger
 import com.libremobileos.sidebar.utils.getBadgedIcon
 import com.libremobileos.sidebar.utils.getSidebarFilteredUsers
+import com.libremobileos.sidebar.utils.getSidebarHiddenPackages
 import com.libremobileos.sidebar.utils.getInfo
 import com.libremobileos.sidebar.utils.isResizeableActivity
+import com.libremobileos.sidebar.utils.isSidebarPackageHidden
 import com.libremobileos.sidebar.utils.isSidebarUserAllowed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,6 +79,10 @@ class AllAppViewModel(private val application: Application): AndroidViewModel(ap
                 val userId = user.identifier
                 if (!userManager.isSidebarUserAllowed(userId)) {
                     logger.d("onPackageAdded: $packageName userId=$userId not allowed")
+                    return
+                }
+                if (application.isSidebarPackageHidden(packageName)) {
+                    logger.d("onPackageAdded: $packageName in hide_applist, skipped")
                     return
                 }
                 if (launchIntent != null && launchIntent.component != null) {
@@ -151,11 +157,14 @@ class AllAppViewModel(private val application: Application): AndroidViewModel(ap
 
     private fun initAllAppList() {
         viewModelScope.launch(Dispatchers.IO) {
+            val hiddenPackages = application.getSidebarHiddenPackages()
             userManager.getSidebarFilteredUsers().forEach { userInfo ->
                 val list = launcherApps.getActivityList(null, userInfo.userHandle)
                 list.forEach { info ->
                     val component = info.componentName
-                    if (!application.isResizeableActivity(component)) {
+                    if (hiddenPackages.contains(component.packageName)) {
+                        logger.d("package in hide_applist, skipped $component")
+                    } else if (!application.isResizeableActivity(component)) {
                         logger.d("activity not resizeable, skipped $component")
                     } else {
                         allAppList.add(
